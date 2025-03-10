@@ -1,0 +1,1143 @@
+---
+title: "Final Project Team 12"
+output: html_notebook
+---
+
+# Background & Introduction
+
+Historically, several states in the United States have passed "Castle Doctrines" to expand the scope of the right to lawful self-defense. The core changes in these laws include the elimination of the duty to retreat in certain places, strengthening legal protections for self-defense, and reducing the legal costs imposed on those who defend themselves. These changes may affect the incentives to commit criminal acts: on the one hand, criminals may be less likely to commit criminal acts for fear of being confronted with forceful counterattacks; on the other hand, lowering the legal threshold for the use of lethal force may increase the likelihood that a conflict will escalate into a lethal incident. Thus, the central question of this study is: does the expansion of castle laws act as a deterrent to crime, or does it increase the incidence of violence?[Cheng Cheng & Mark Hoekstra (2012)](https://www.nber.org/papers/w18134) conducted previous research on this question, using the traditional DiD/FE methodology.Our dataset utilizes the dataset from this dissertation, and builds on their methodology and innovate on top of it.
+
+The content of our dataset is as follows (The dataset was not included in the paper, and we obtained data from [Site 1](https://rdrr.io/cran/causaldata/man/castle.html) and [Site 2](https://github.com/scunning1975/mixtape/tree/master) as well as variable explanations):
+
+**Policy variables**
+
+-   cdl: whether the Castle Law is in force (1 = in force, 0 = not in force).
+
+-   pre2_cdl: indicator variable for the two years prior to the entry into force of the Castle Law.
+
+-   caselaw: whether there is already relevant case law supporting the extension of the right to self-defense.
+
+-   anywhere: whether the Castle Law extends outside the home (e.g. vehicle, workplace).
+
+-   assumption: whether to include a presumption of "reasonable fear" (i.e., the law implicitly assumes that the person using force is in a state of reasonable fear).
+
+-   civil: whether to grant civil immunity (i.e., immunity from prosecution for self-defense).
+
+**Variables related to crime rates**
+
+-   homicide_c: Total number of murder and non-negligent manslaughter cases in the state for the year (Homicide count).
+
+-   homicide: Murder and non-negligent manslaughter count per 100,000 state population.
+
+-   murder: number of murder cases (per 100,000 population) (Murder count per 100,000 state population).
+
+-   hc_felonysus: homicides due to felony or suspected felony (per 100,000 population) (Felony and suspected felony-type homicide count per 100,000 state population).
+
+-   robbery: number of robberies per 100,000 state population.
+
+-   robbery_gun_r: Proportion of robberies using guns.
+
+-   assault: Aggravated assault count per 100,000 state population.
+
+-   burglary count per 100,000 state population.
+
+-   larceny: burglary count per 100,000 state population.
+
+-   motor: motor vehicle theft count per 100,000 state population.
+
+-   jhcitizen_c: Justifiable homicide by private citizen count.
+
+-   jhpolice_c: Justifiable homicide by police count.
+
+-   jhcitizen: Justifiable homicide by private citizen per 100,000 state population.
+
+-   jhpolice: Justifiable homicide by police per 100,000 state population.
+
+**Socioeconomic control variables**
+
+-   population: State population.
+
+-   police: Full-time equivalent police per 100,000 state population.
+
+-   prisoner: Incarceration rate per 100,000 state population.
+
+-   lagprisoner: previous year's incarceration rate (Lagged incarceration rate per 100,000 state population).
+
+-   unemployrt: Unemployment rate.
+
+-   income: State median income for state residents.
+
+-   poverty: Poverty rate.
+
+-   exp_subsidy: Government spending per capita on subsidies.
+
+-   exp_pubwelfare: Government spending per capita on public welfare.
+
+**Demographic characteristics (race, age, etc.)**
+
+-   blackm_15_24: Percentage of the population that is African American male aged 15-24 (% of black male aged 15-24).
+
+-   whitem_15_24: % of white male population aged 15-24 (% of white male aged 15-24).
+
+-   blackm_25_44: Percentage of African American male population aged 25-44 (% of black male aged 25-44).
+
+-   whitem_25_44: % of white male population aged 25-44 (% of white male aged 25-44).
+
+**Area and Time Variables**
+
+-   year: year (2000-2010).
+
+-   state: name of the state.
+
+-   sid: unique identifier of the state.
+
+-   northeast, midwest, south, west: regional dummy variable indicating the U.S. geographic region in which the state is located.
+
+-   effyear: year in which the Castle Law went into effect (this variable is null if the state does not have a Castle Law).
+
+The objectives of our study are as follows:
+
+-   Treatment variable: whether a state passes a castle law
+
+-   Outcome variable: the number of homicides in a state
+
+Our methodological framework is as follows: first, we conduct a baseline model using the traditional DiD/two-way FE methodology to examine average effects at the national level. Next, we innovatively add instrumental variables to the DiD/two-way FE method for further effect optimization. Finally, the scope of our discussion focuses on each state, examined using a synthetic control/synthetic DiD approach.
+
+# EDA & Data Processing
+
+```{r}
+rm(list=ls()) # clear workspace
+cat("\014")  # clear console
+library(tidyverse)
+library(ggplot2)
+library(haven)
+library(plm)
+library(psych)
+library(gplots)
+library(car)
+library(dplyr)
+library("sensemakr")
+library(AER)
+library(randomForest)
+library(grf)
+
+data <- read_csv("ori_castle.csv")
+summary(data)
+colSums(is.na(data))
+```
+
+Since the cdl column appeared as a value between 0 and 1, i.e., defined according to the month in which the law was passed divided by a total of 12 months, we define cdl to be values either 0 or 1 according to the effyear column for simplicity of study, indicating whether the law was passed in the current year. At the same time, we define the **post** variable and the **treated** variable for further possible use. treated indicates whether the law was passed in this state; post indicates whether the year is the year in which the law was passed.
+
+```{r}
+data <- data %>%
+  mutate(
+    effyear = ifelse(is.na(effyear), 0, effyear),  
+    post = ifelse(year == effyear & effyear > 0, 1, cdl),  
+    treated = ifelse(effyear > 0, 1, 0)  
+  ) 
+
+data <- data %>%
+  mutate(
+    state = as.factor(state),  
+    year = as.factor(year),
+    sid = as.integer(sid),
+    effyear = as.integer(effyear),
+    post = as.integer(post), 
+    treated = as.integer(treated)  
+  ) 
+
+num_cols <- setdiff(names(data), c("state", "year", "sid", "effyear", "post", "treated"))
+data[num_cols] <- lapply(data[num_cols], as.numeric)
+
+data
+```
+
+### Distributions and time trends of crime variables
+
+```{r}
+crime_vars <- c("homicide", "robbery", "assault", "burglary", "larceny", "motor", "murder", "robbery_gun_r")
+
+for (var in crime_vars) {
+  p <- ggplot(data, aes_string(x = var)) +
+    geom_histogram(bins = 30, fill = "steelblue", color = "black") +
+    labs(title = paste("Histogram of", var), x = var, y = "Frequency")
+  print(p)
+  q <- ggplot(data, aes_string(x = var)) +
+        geom_histogram(bins = 30, fill = "skyblue", color = "black") +
+        facet_wrap(~ treated) +
+        labs(title = paste("Histogram of", var,"by treated"), x = var, y = "Frequency")
+  print(q)
+}
+```
+
+Trends in different crime rates in states that passed Castle Doctrine laws at some point between 2000 and 2010 (treated = 1) and states that never passed Castle Doctrine laws (treated = 0)
+```{r}
+crime_vars <- c("homicide", "robbery", "assault", "burglary", "larceny", "motor", "murder", "robbery_gun_r")
+
+for (var in crime_vars) {
+  p1 <- ggplot(data, aes(x = year, y = .data[[var]], group = state, color = as.factor(treated))) +
+    geom_point(alpha = 0.3) +
+    geom_smooth(aes(group = treated), method = "loess", se = FALSE, size = 1.2) +
+   # facet_wrap(~ treated) +
+    labs(
+      title = paste("Crime Trends Over Time:", var),
+      x = "Year",
+      y = var,
+      color = "Treated"
+    ) +
+    theme_minimal()
+  
+  print(p1)
+}
+
+```
+
+### Distributions on covariates
+
+```{r}
+
+socioeconomic_vars <- c("income", "poverty", "police", "prisoner", "lagprisoner", "unemployrt", "exp_subsidy", "exp_pubwelfare")
+demographic_vars <- c("blackm_15_24", "whitem_15_24", "blackm_25_44", "whitem_25_44")
+
+for (var in c(socioeconomic_vars, demographic_vars)) {
+  
+  p <- ggplot(data, aes_string(x = var)) + 
+    geom_histogram(bins = 30, fill = "steelblue", color = "black") + 
+    labs(title = paste("Histogram of", var), x = var, y = "Frequency") +
+    theme_minimal()
+  print(p)
+  
+  q <- ggplot(data, aes_string(x = var)) + 
+    geom_histogram(bins = 30, fill = "skyblue", color = "black") + 
+    facet_wrap(~ treated) + 
+    labs(title = paste("Histogram of", var, "by treated"), x = var, y = "Frequency") +
+    theme_minimal()
+  print(q)
+}
+
+```
+
+For distributions of crime variables, we find that the crime variables generally show fewer extremely large values. Therefore we plan to adopt Log transformation.
+
+For the time trend, we observe a relatively significant change in some of the crime variables around 2005, while the two data sets are largely consistent with the parallel trend hypothesis until about 2005.
+
+For the distribution of different covariates, we observe that our data are relatively heterogeneous in terms of the distribution of different covariates. However, since we are using panel data, the fixed effects model is effective in controlling for individual heterogeneity that does not vary over time. Therefore, we do not need to use matching methods (e.g., PSM or IPW) because the fixed effects already absorb the effects of these time-invariant covariates. In addition, matching methods may lead to missing samples, which reduces estimation efficiency and does not deal with time-varying features. Therefore, we use a double difference (DiD) approach that combines State Fixed Effects and Year Fixed Effects to ensure that our estimates are not affected by initial covariate inhomogeneity.
+
+```{r}
+data <- data %>%
+  mutate(across(all_of(crime_vars), ~ log(. + 1), .names = "log_{.col}"))
+
+head(data)
+```
+
+Now let's see the scatter plot of log-transformed data.
+
+```{r}
+crime_log_vars <- c("log_homicide", "log_robbery", "log_assault", "log_burglary", "log_larceny", "log_motor", "log_murder","log_robbery_gun_r")
+
+for (var in crime_log_vars) {
+  p1 <- ggplot(data, aes(x = year, y = .data[[var]], group = state, color = as.factor(treated))) +
+    geom_point(alpha = 0.3) +
+    geom_smooth(aes(group = treated), method = "loess", se = FALSE, size = 1.2) +
+   # facet_wrap(~ treated) +
+    labs(
+      title = paste("Crime Trends Over Time:", var),
+      x = "Year",
+      y = var,
+      color = "Treated"
+    ) +
+    theme_minimal()
+  
+  print(p1)
+}
+```
+View homicide before and after Log transformation. We see its distribution has become more normal.
+```{r}
+par(mfrow = c(1,2))
+hist(data$homicide, main = "Original Homicide", col = "steelblue")
+hist(data$log_homicide, main = "Log Transformed Homicide", col = "skyblue")
+```
+We find that many of the variables have relatively much more even distributions after treatment.
+
+### IV Setup
+
+We found data on Rand on guns in each US state during the experimental year, and we thought the variables inside could provide us with instrumental variable possibilities. Specific conjectures and validation of the validity of the instrumental variables are presented later. The instrumental variables we use are:
+
+-   GunsAmmo: Within-year standardization of the square root of Guns and Ammo Subscriptions/Population
+
+-   HuntLic: Square root of Hunting Licenses/Population.
+
+Our initial guess is that these two variables do not directly affect homicide and are related to legislation.
+
+```{r}
+firearm_data <- read.csv("State_Firearm_Data.csv", stringsAsFactors = FALSE)
+
+colnames(firearm_data)[colnames(firearm_data) == "STATE"] <- "state"
+colnames(firearm_data)[colnames(firearm_data) == "Year"] <- "year"
+
+merged_data <- merge(data, firearm_data[, c("state", "year", "HFR","HuntLic","Fem_FS_S","Male_FS_S","GunsAmmo")], 
+                     by = c("state", "year"), all.x = TRUE)
+head(merged_data)
+```
+
+# Nationwide DiD/Fixed Effect Exploration
+
+In the next section, we'll analyze how the passage of the Castle Doctrine Law (CDL) impacted homicide nationwide. Our dataset is panel data that records different characteristics for each year in each state. We find that the year in which the law was introduced varies from state to state, so we take a DiD/fixed effects approach to this panel data to explore treatment effects. The parallel trend assumption can be confirmed by the previous chart called Crime Trends Over Time: Homicide. Therefore, we can continue.
+
+```{r}
+data.panel <- pdata.frame(merged_data, index = c("state", "year"))
+pdim(data.panel)
+```
+
+There are a total of 50 states (n = 50), the observation years are 2000-2010 (T = 11), and the total sample size, N = 550, is Balanced Panel data (BP).
+
+```{r}
+DiD.FE.StateYear <- plm(
+  log_homicide ~ cdl,                
+  data  = data.panel,
+  model = "within",             
+  effect = "twoways"            
+)
+
+summary(DiD.FE.StateYear)
+```
+
+This model used DiD + fixed effects (FE) to assess the impact of Castle Doctrine Law (CDL) on homicide rates. The model controls for time-invariant heterogeneity across states using State Fixed Effects and for national time trends using Year Fixed Effects to improve the reliability of causal identification.
+
+The regression results show that the implementation of castle laws is positively associated with an increase in homicide rates. After controlling for time and area fixed effects, the implementation of castle laws resulted in an increase in homicide rates of approximately 5.6% (p = 0.023), a result that was significant at the 5% level. The positive effect of the coefficient suggests that castle laws may have failed to achieve their intended goal of deterring crime and instead may have contributed to more violent conflicts escalating into fatalities. This finding is consistent with some of the research that suggests that lowering the legal costs of using lethal force may lead to higher homicide rates.
+
+In addition, the low R² of the model (0.01049) suggests that changes in the homicide rate are mainly influenced by factors that are not included, such as economic conditions, police investment, and gun ownership. Therefore, future studies can include more control variables to further verify the robustness of the policy effects. Heterogeneity analyses can also be conducted to explore the differences in the impact of the policy in different regions or populations.
+
+```{r}
+
+boxplot(log_homicide~state, data = data.panel)
+```
+
+There is a large amount of heterogeneity across states, with some states (e.g., Alabama, Florida) having higher homicide rates and some states (e.g., South Dakota, Wyoming) having lower homicide rates. This suggests differences in the crime environment across states, which necessitates the use of state fixed effects (State FE).
+
+```{r}
+boxplot(cdl~year, data = data.panel)
+```
+
+This validates the temporal variation in policy, i.e., states implemented the Castle Act in different years, providing strong support for the use of double-differencing (DiD).
+
+Then, we are going to test if there is a need to use the state&year FE.
+
+```{r}
+DiD.Pooled<-lm(log_homicide ~ cdl, data = merged_data)
+DiD.FE.State <- plm(log_homicide ~ cdl, data=data.panel,model="within")
+```
+
+```{r}
+pFtest(DiD.FE.State,DiD.Pooled)
+```
+
+-   Unconstrained model (DiD.FE.State): contains state fixed effects (State FE).
+
+-   Constrained model (DiD.Pooled): plain OLS (no fixed effects included).
+
+-   Significance (p \< 0.001) indicates that the fixed effects model outperforms the ordinary OLS.
+
+This suggests that there is significant individual heterogeneity across states and that a simple OLS may be biased, thus state fixed effects (State FE) are necessary.
+
+```{r}
+pFtest(DiD.FE.StateYear,DiD.FE.State) 
+```
+
+-   Unconstrained model (DiD.FE.StateYear): contains state fixed effects and year fixed effects (State FE + Year FE).
+
+-   Constrained model (DiD.FE.State): contains only state fixed effects (State FE).
+
+-   The p-value \< 0.001 indicates that the inclusion of year fixed effects significantly improved the model fit.
+
+This suggests that national time trends have a significant impact on homicide rates, such as national changes in economic conditions, policy environment, and law enforcement efforts, and thus year fixed effects (Year FE) are also necessary.
+
+We try to use StateSpecific to further estimate the parallel trend hypothesis by adding the interaction term between Year and State.
+
+```{r}
+DiD.StateSpecific <- lm(log_homicide ~ cdl + factor(state) + factor(year) + factor(state)*(year), data=data)
+summary(DiD.StateSpecific)
+```
+
+Since the state × year interaction term introduces 50 × 11 = 550 parameters, which is exactly the same as the sample size, it makes the model's degrees of freedom zero, resulting in all residuals being zero and preventing the calculation of t-values and standard errors. We were therefore unable to use such a method, and we decided to come back to the previous time trend plot to determine parallel trends.
+
+Next, the model introduces several confounders in addition to the original State + Year Fixed Effects (TWFE) to improve the robustness of the estimation. Moreover, the model switches the explanatory variable from log_homicide to homicide_c to avoid the possible impact bias due to the logarithmic transformation.
+
+```{r}
+DiD.FE.StateYear.cof <- plm(
+  homicide_c ~ cdl 
+                 + unemployrt 
+                 + income 
+                 + blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44
+                 + prisoner + lagprisoner
+                 + poverty
+                 + exp_subsidy + exp_pubwelfare
+                 + police,                
+  data  = data.panel,
+  model = "within",             
+  effect = "twoways"            
+)
+
+summary(DiD.FE.StateYear.cof)
+```
+
+The estimated coefficient of the effect of Castle Laws (CDL) on homicide rates = 34.26, p = 0.00014, holds at the 1% level of significance. This suggests that after controlling for economic, demographic, judicial, and government spending factors, the implementation of Castle Laws is still associated with an increase in the total number of homicides, i.e., an average of about 34 additional murders per year (in each state) after the implementation of Castle Laws.
+
+Then, we are going to do the OVB sensitivity analysis for the model. We change the plm form to lm form based on LSDV to run the function.
+
+```{r}
+DiD.FE.StateYear.cof.lsdv <- lm(homicide_c ~ cdl + unemployrt + income + 
+               blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+               prisoner + lagprisoner + poverty + exp_subsidy + exp_pubwelfare +
+               police + factor(state) + factor(year),
+               data = merged_data)
+sens <- sensemakr(model = DiD.FE.StateYear.cof.lsdv, treatment = "cdl")
+summary(sens)
+plot(sens)
+```
+
+The Unadjusted Estimate of CDL shows that CDL still has a significant positive effect on homicide rates, i.e., an average of about 34 additional murders per state per year after the policy was implemented.
+
+-   Partial R² = 0.0301: This means that, assuming the existence of an extreme unobserved confounder that is completely independent of the other control variables, it would need to explain at least 3.01% of the residual variance in order to completely zero out the effect of CDL.
+
+-   Robustness Value (q = 1) = 0.1613: If an unobserved confounding variable affects both CDL (policy implementation) and homicide (homicide_c) and explains more than 16.13% of the residual variance, then the estimate of CDL may be biased toward zero.
+
+-   Robustness Value (q = 1, α = 0.05) = 0.0824: If an unobserved confounding variable explains more than 8.24% of the variance of the residuals, then the CDL estimate may become less significant (p \> 0.05). This means that our results remain robust (i.e., the CDL remains significant) as long as the explanatory power of the unobserved confounders is below 8.24%.
+
+We conclude that the Robustness Value is not high enough and the robustness of the model needs to be improved.
+
+We next compare our sensitivity analysis with that of the model without confounding variables.
+
+```{r}
+DiD.FE.StateYear.lsdv <- lm(homicide_c ~ cdl + factor(state) + factor(year),
+               data = merged_data)
+sens2 <- sensemakr(model = DiD.FE.StateYear.lsdv, treatment = "cdl")
+summary(sens2)
+```
+
+We found that when we include all the potential confounders, the robust value decreases, implying that we need to adjust the selection of confounders.
+
+Next, we go on to explore the sensitivity analysis of the models that incorporate them in turn, according to the categories of the different confounding variables.
+
+```{r}
+mod_baseline <- lm(homicide_c ~ cdl + factor(state) + factor(year),
+                   data = data)
+
+mod_economic <- lm(homicide_c ~ cdl + unemployrt + income + poverty +
+                     factor(state) + factor(year),
+                   data = data)
+
+mod_demographics <- lm(homicide_c ~ cdl +
+                         blackm_15_24 + whitem_15_24 +
+                         blackm_25_44 + whitem_25_44 +
+                         factor(state) + factor(year),
+                       data = data)
+
+mod_criminal <- lm(homicide_c ~ cdl + prisoner + lagprisoner +
+                     factor(state) + factor(year),
+                   data = data)
+
+mod_welfare <- lm(homicide_c ~ cdl + exp_subsidy + exp_pubwelfare +
+                    factor(state) + factor(year),
+                  data = data)
+
+mod_police <- lm(homicide_c ~ cdl + police +
+                   factor(state) + factor(year),
+                 data = data)
+
+mod_full <- lm(homicide_c ~ cdl +
+                 unemployrt + income + poverty +
+                 blackm_15_24 + whitem_15_24 +
+                 blackm_25_44 + whitem_25_44 +
+                 prisoner + lagprisoner +
+                 exp_subsidy + exp_pubwelfare +
+                 police +
+                 factor(state) + factor(year),
+               data = data)
+
+coef_table <- tibble(
+  Model = c("Baseline", "Economic", "Demographics", "Criminal",
+            "Welfare", "Police", "Full"),
+  cdl_Coefficient = c(
+    coef(mod_baseline)["cdl"],
+    coef(mod_economic)["cdl"],
+    coef(mod_demographics)["cdl"],
+    coef(mod_criminal)["cdl"],
+    coef(mod_welfare)["cdl"],
+    coef(mod_police)["cdl"],
+    coef(mod_full)["cdl"]
+  ),
+  p_value = c(
+    summary(mod_baseline)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_economic)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_demographics)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_criminal)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_welfare)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_police)$coefficients["cdl", "Pr(>|t|)"],
+    summary(mod_full)$coefficients["cdl", "Pr(>|t|)"]
+  )
+)
+print(coef_table)
+
+```
+
+```{r}
+model_list <- list(
+  Baseline = mod_baseline,
+  Economic = mod_economic,
+  Demographics = mod_demographics,
+  Criminal = mod_criminal,
+  Welfare = mod_welfare,
+  Police = mod_police,
+  Full = mod_full
+)
+
+  
+get_robust_value <- function(mod) {
+  sens_obj <- sensemakr(model = mod, treatment = "cdl")
+  rv_q_value <- sens_obj$sensitivity_stats$rv_q
+
+  return(rv_q_value)
+}
+
+robust_values <- lapply(model_list, get_robust_value)
+
+print(robust_values)
+```
+
+We found that our estimates are significant in all cases and that the differences are not significant. However, we found that Demographics and Criminal type potential confounders are making robust value lower than the baseline. Therefore, we believe that these should be removed.
+
+```{r}
+DiD.FE.StateYear.cof.lsdv <- lm(homicide_c ~ cdl + unemployrt + income + 
+               poverty + exp_subsidy + exp_pubwelfare +
+               police + factor(state) + factor(year),
+               data = merged_data)
+sens <- sensemakr(model = DiD.FE.StateYear.cof.lsdv, treatment = "cdl")
+summary(DiD.FE.StateYear.cof.lsdv)
+summary(sens)
+```
+
+The result is promising. After removing Demographics and Criminal type potential confounders, the Robustness Value is higher than the previous baseline and full model. This indicates that our OVB problem is solved to more extend with this sensitivity analysis on our dataset. Our model is more robust than before.
+
+# Nationwide DiD/Fixed Effect with IV Exploration
+
+Then, we try IV method combined with DiD/FE.
+
+```{r}
+mod_iv_fe_lsdv <- ivreg(
+  homicide_c ~ cdl + unemployrt + income + poverty + exp_subsidy + exp_pubwelfare +
+               police + factor(state) + factor(year)
+  | unemployrt + income + poverty + exp_subsidy + exp_pubwelfare + police + factor(state) + factor(year) + GunsAmmo + HuntLic ,
+  
+  data = merged_data
+)
+
+summary(mod_iv_fe_lsdv, diagnostics = TRUE)
+
+```
+
+First, the F-statistic of the Weak Instrument Test is 6.628, p = 0.00145, which is smaller than 0.05 significant level, indicating that HFR and GunsAmmo are statistically significant predictors of cdl. Second, the Wu-Hausman test had an F-statistic of 6.462, p = 0.01133, which significantly rejected the original hypothesis that cdl was an exogenous variable, suggesting that cdl was endogenous, and thus the OLS estimates may have been biased, while the IV estimates were necessary. Thirdly, the statistic of Sargan's test of over-identification is 0.615, p = 0.43299, indicating that we cannot reject the hypothesis of exogeneity of instrumental variables, i.e., HFR and GunsAmmo should be seen exogenous instrumental variables and is likely to be not related to omitted variables. iv estimation shows that the coefficient estimate of cdl is 174.6 with a standard error of 66.35, a t-value of 2.632, and a p-value of 0.008772, significant at the 1% significance level, indicating that cdl has a significant positive effect on homicide_c, i.e., stricter CDL regulations may be associated with higher homicide rates.
+
+To evaluate the validity of IV:
+
+Relevance Restriction: Common sense suggests that the proportion of hunting licenses and the amount of ammunition in the home are highly correlated with gun availability. Gun availability, in turn, is in turn related to attitudes toward firearms-related bills, i.e., a state with more guns is more likely to favor laws that support their gun-related activities. The Weak instruments suggests that this is satisfied.
+
+Exclusion Restriction: According to [Frederic Lemieux (2014)](https://ijcjs.com/menu-script/index.php/ijcjs/article/view/149), gun culture (e.g., legal hunting, shooting activities) does not directly lead to an increase in homicides among cities or residents. The study suggests that the key determinant of gun violence is the gun law environment, not the gun culture itself. Strict gun control regulations significantly reduce gun violence and mortality rates, while the effects of gun culture are primarily transmitted indirectly through the legislative environment. Therefore, it is reasonable to assume that, i.e., legal hunting and magazine subscription are not directly and significantly causally related to homicides, and that the main avenue of influence is legislative regulation of gun availability. This proves that the Exclusion Restriction of our instrumental variable is satisfied.
+
+Independence Restriction: Our Sargan test demonstrates that our two instrumental variables are not related to potential OVB.
+
+We therefore conclude that based on the DiD and FE methods that incorporate IV our model estimates our ATE to be approximately 36 (without IV) and 166 (with IV). This suggests that passing a castle law would boost the number of homicides in the state by 36/166 on average. Suggesting that our laws do not have a good effect.
+
+# Synthetic DiD
+
+Above analysis highlighted the importance of controlling for heterogeneity in covariates to ensure robust causal inference. To further enhance our estimation strategy, we now explore methods that address potential biases and improve treatment effect estimation. We first implement Synthetic Difference-in-Differences (DiD) to construct a more credible counterfactual for the treated group.
+
+Install synthdid from github
+```{r}
+#Run below code if devtools is not installed
+
+#install.packages("devtools")  #Install devtools
+#library(devtools)
+#devtools::install_github("synth-inference/synthdid")  #Install synthdid from github
+```
+
+```{r}
+library(synthdid) #Load synthdid
+```
+
+Check number of states passed CDL in different years
+```{r}
+law_adoption_summary <- data %>%
+  filter(effyear > 0) %>%  # Filter out states that never pass CDL（effyear = 0）
+  distinct(state, effyear) %>%
+  group_by(effyear) %>%
+  summarise(
+    num_states = n(),
+    states = paste(state, collapse = ", ")
+  ) %>%
+  arrange(effyear)
+
+print(law_adoption_summary)
+```
+We see that 2006 has the highest number of states passed CDL (13). Since synthdid and panel.matrices cannot use data where treatment is not simultaneous, we will keep only the states that passed CDL in 2006 for simplicity.
+
+Data processing
+```{r}
+sdid_data <- data %>%
+  filter(effyear == 2006 | effyear == 0) %>%
+  mutate(
+    year = as.integer(as.character(year)),
+  )
+```
+
+```{r}
+# synthetic DiD for log_homicide
+sdid_mats <- panel.matrices(as.data.frame(
+  sdid_data),
+  unit      = "state",
+  time      = "year",
+  outcome   = "log_homicide",
+  treatment = "post"
+)
+```
+
+```{r}
+# Check dimensions
+dim(sdid_mats$Y)    # (num_units x num_time_periods)
+sdid_mats$N0 # number of states
+sdid_mats$T0 # number of years before CDL passed
+```
+Run the Synthetic DiD estimator
+```{r}
+# ATT
+tau.hat <- synthdid_estimate(
+  Y  = sdid_mats$Y,
+  N0 = sdid_mats$N0,
+  T0 = sdid_mats$T0
+)
+
+summary(tau.hat)
+```
+Here we are using log_homicide as the outcome variable. The estimated Average Treatment Effect on the Treated (ATT) is 0.0613, suggesting that the adoption of CDL is associated with a 6.1% increase in homicide rates on a log scale.
+```{r}
+se = sqrt(vcov(tau.hat, method='placebo'))
+
+sprintf('point estimate: %1.2f', tau.hat) #ATT
+sprintf('95%% CI (%1.2f, %1.2f)', tau.hat - 1.96 * se, tau.hat + 1.96 * se) #95% CI
+```
+The 95% CI includes 0, we cannot reject the null hypothesis that ATT = 0 and the ATT is not statistically significant.
+```{r}
+synthdid_plot(tau.hat)
+```
+Before 2006, the trends between treated and synthetic control states are relatively parallel, supporting the parallel trends assumption.
+After CDL implementation in 2006, the treated group diverges upward while the synthetic control remains stable, suggesting a potential increase in log homicide rates due to CDL.
+```{r}
+synthdid_units_plot(tau.hat, se.method='placebo')
+```
+```{r}
+state2006 <- data %>%
+  filter(effyear == 2006)
+
+ggplot(state2006, aes(x = year, y = log_homicide, group = state, color = state)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Treated States (eff_year = 2006) Homicide Rate Trend",
+       x = "Year",
+       y = "Log(Homicide)") +
+  theme_minimal()
+```
+We see that among states passed CDL in 2006, they have quite different trend of log_homicide throughout time. This heterogeneity suggests that a single Synthetic DiD estimation may not capture the full effect, motivating further analysis on individual states.
+As a next step, we will apply Synthetic DiD to selected states individually to better isolate treatment effects.
+
+Alabama
+```{r}
+sdid_data_AL <- sdid_data %>%
+  filter(state == 'Alabama' | effyear == 0) %>%
+  mutate(
+    year = as.integer(as.character(year)),
+  )
+```
+
+```{r}
+sdid_mats_AL <- panel.matrices(
+  as.data.frame(sdid_data_AL),
+  unit      = "state",
+  time      = "year",
+  outcome   = "log_homicide",
+  treatment = "post"
+)
+
+dim(sdid_mats_AL$Y)    # (num_units x num_time_periods)
+sdid_mats_AL$N0 # number of states
+sdid_mats_AL$T0 # number of years before CDL passed
+```
+```{r}
+tau.hat_AL <- synthdid_estimate(
+  Y  = sdid_mats_AL$Y,
+  N0 = sdid_mats_AL$N0,
+  T0 = sdid_mats_AL$T0
+)
+
+summary(tau.hat_AL)
+
+se = sqrt(vcov(tau.hat_AL, method='placebo'))
+
+sprintf('point estimate AL: %1.2f', tau.hat_AL) #ATT
+sprintf('95%% CI AL(%1.2f, %1.2f)', tau.hat_AL - 1.96 * se, tau.hat_AL + 1.96 * se) #95% CI
+```
+The point estimate for Alabama is 0.08, suggesting a 8.4% increase in homicide rates following CDL adoption. However, the 95% confidence interval (-0.15, 0.31) includes zero, indicating that this estimate is not statistically significant.
+```{r}
+synthdid_plot(tau.hat_AL)
+```
+
+Louisiana
+```{r}
+sdid_data_LA <- sdid_data %>%
+  filter(state == 'Louisiana' | effyear == 0) %>%
+  mutate(
+    year = as.integer(as.character(year)),
+  )
+```
+
+```{r}
+sdid_mats_LA <- panel.matrices(
+  as.data.frame(sdid_data_LA),
+  unit      = "state",
+  time      = "year",
+  outcome   = "log_homicide",
+  treatment = "post"
+)
+```
+
+```{r}
+tau.hat_LA <- synthdid_estimate(
+  Y  = sdid_mats_LA$Y,
+  N0 = sdid_mats_LA$N0,
+  T0 = sdid_mats_LA$T0
+)
+
+summary(tau.hat_LA)
+
+se = sqrt(vcov(tau.hat_LA, method='placebo'))
+
+sprintf('point estimate LA: %1.2f', tau.hat_LA) #ATT
+sprintf('95%% CI LA(%1.2f, %1.2f)', tau.hat_LA - 1.96 * se, tau.hat_LA + 1.96 * se) #95% CI
+```
+The point estimate for Louisana is 0.13, suggesting a 13% increase in homicide rates following CDL adoption. However, the 95% confidence interval (-0.15, 0.40) includes zero, indicating that this estimate is not statistically significant.
+```{r}
+synthdid_plot(tau.hat_LA)
+```
+South Dakota
+```{r}
+sdid_data_SD <- sdid_data %>%
+  filter(state == 'South Dakota' | effyear == 0) %>%
+  mutate(
+    year = as.integer(as.character(year)),
+  )
+```
+
+```{r}
+sdid_mats_SD <- panel.matrices(
+  as.data.frame(sdid_data_SD),
+  unit      = "state",
+  time      = "year",
+  outcome   = "log_homicide",
+  treatment = "post"
+)
+```
+
+```{r}
+tau.hat_SD <- synthdid_estimate(
+  Y  = sdid_mats_SD$Y,
+  N0 = sdid_mats_SD$N0,
+  T0 = sdid_mats_SD$T0
+)
+
+summary(tau.hat_SD)
+
+se = sqrt(vcov(tau.hat_SD, method='placebo'))
+
+sprintf('point estimate SD: %1.2f', tau.hat_SD) #ATT
+sprintf('95%% CI SD(%1.2f, %1.2f)', tau.hat_SD - 1.96 * se, tau.hat_SD + 1.96 * se) #95% CI
+```
+The point estimate for Louisana is 0.38, which translates to approximately a 46.2% increase in homicide rates. The 95% confidence interval (0.14, 0.62) does not include zero, suggesting that the estimated increase is statistically significant at the 5% level.This suggests that CDL implementation in South Dakota is associated with a significant rise in homicides compared to its synthetic control.
+
+```{r}
+synthdid_plot(tau.hat_SD)
+```
+# Meta Learners
+
+Data Preparation
+```{r}
+df <- data %>%
+  select(
+    Y = log_homicide,
+    W = post,
+    #X
+    population,
+    police,
+    unemployrt,
+    income,
+    blackm_15_24,
+    whitem_15_24,
+    blackm_25_44,
+    whitem_25_44,
+    prisoner,
+    poverty,
+    exp_subsidy,
+    exp_pubwelfare
+  ) %>%
+  drop_na()
+
+Y <- df$Y
+W <- df$W
+
+X <- df %>%
+  select(
+    population,
+    police,
+    unemployrt,
+    income,
+    blackm_15_24,
+    whitem_15_24,
+    blackm_25_44,
+    whitem_25_44,
+    prisoner,
+    poverty,
+    exp_subsidy,
+    exp_pubwelfare
+  ) %>%
+  as.matrix()
+```
+
+T-Learner
+```{r}
+df_treated <- df %>% filter(W == 1)
+df_control <- df %>% filter(W == 0)
+```
+
+```{r}
+model_treated <- randomForest(
+  Y ~ population + police + unemployrt + income +
+    blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+    prisoner + poverty + exp_subsidy + exp_pubwelfare,
+  data = df_treated
+)
+model_control <- randomForest(
+  Y ~ population + police + unemployrt + income +
+    blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+    prisoner + poverty + exp_subsidy + exp_pubwelfare,
+  data = df_control
+)
+```
+
+```{r}
+Yhat_treated  <- predict(model_treated, newdata = df)
+Yhat_control  <- predict(model_control, newdata = df)
+```
+
+```{r}
+tau_hat_T     <- Yhat_treated - Yhat_control
+ATE_t_learner <- mean(tau_hat_T)
+
+cat("T-Learner ATE:", ATE_t_learner, "\n")
+
+```
+The T-Learner trains two separate Random Forest regression models. One model (treated group) is trained using data where W=1. Another model (control group) is trained using data where W=0. Predictions for both models are generated for all observations, and the treatment effect is estimated as the difference between predicted values. The Average Treatment Effect (ATE) for the T-Learner is 0.1425, suggesting a 15.3% increase in homicide rates due to CDL implementation.
+
+
+S-Learner
+```{r}
+model_s <- randomForest(
+  Y ~ W + population + police + unemployrt + income +
+    blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+    prisoner + poverty + exp_subsidy + exp_pubwelfare,
+  data = df
+)
+```
+
+```{r}
+df_w1 <- df %>% mutate(W = 1)
+df_w0 <- df %>% mutate(W = 0)
+
+Yhat_w1 <- predict(model_s, newdata = df_w1)
+Yhat_w0 <- predict(model_s, newdata = df_w0)
+
+```
+
+```{r}
+tau_hat_S <- Yhat_w1 - Yhat_w0
+ATE_s_learner <- mean(tau_hat_S)
+
+cat("S-Learner ATE:", ATE_s_learner, "\n")
+```
+The S-Learner uses a single Random Forest model, where treatment status (W) is included as a predictor along with all covariates. The model predicts homicide rates under two counterfactual scenarios. For all observations if they were treated and for all observations if they were not treated. The Average Treatment Effect (ATE) for the S-Learner is 0.0074, translating to a 0.74% increase in homicide rates, which is substantially lower than the T-Learner estimate.
+
+Significance test: confidence intervals for T-Learner ATE estimated using Bootstrap
+```{r}
+set.seed(123)  # Set Seed
+B <- 200       # Bootstrap repetition
+n <- nrow(df)
+
+ATE_bootstrap_T <- numeric(B)
+
+for (b in 1:B) {
+  # 1. bootstrap sampling
+  idx <- sample(seq_len(n), size = n, replace = TRUE)
+  df_boot <- df[idx, ]
+  
+  # 2. Split data
+  df_treated_boot <- df_boot %>% filter(W == 1)
+  df_control_boot <- df_boot %>% filter(W == 0)
+  
+  # 3. Train
+  model_treated_boot <- randomForest(
+    Y ~ population + police + unemployrt + income +
+      blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+      prisoner + poverty + exp_subsidy + exp_pubwelfare,
+    data = df_treated_boot
+  )
+  
+  model_control_boot <- randomForest(
+    Y ~ population + police + unemployrt + income +
+      blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+      prisoner + poverty + exp_subsidy + exp_pubwelfare,
+    data = df_control_boot
+  )
+  
+  # 4. ITE and ATE
+  Yhat_treated_boot  <- predict(model_treated_boot, newdata = df_boot)
+  Yhat_control_boot  <- predict(model_control_boot, newdata = df_boot)
+  
+  tau_hat_boot <- Yhat_treated_boot - Yhat_control_boot
+  ATE_bootstrap_T[b] <- mean(tau_hat_boot)
+}
+
+# mean of Bootstrap distribution and 95% CI
+ATE_mean_T <- mean(ATE_bootstrap_T)
+CI_lower_T <- quantile(ATE_bootstrap_T, probs = 0.025)
+CI_upper_T <- quantile(ATE_bootstrap_T, probs = 0.975)
+
+cat("T-Learner Bootstrap ATE:", ATE_mean_T, "\n")
+cat("95% CI:", CI_lower_T, "~", CI_upper_T, "\n")
+
+```
+T-Learner Result is statistically significant.
+
+
+Significance test: confidence intervals for S-Learner ATE estimated using Bootstrap
+```{r}
+
+ATE_bootstrap_S <- numeric(B)
+
+for (b in 1:B) {
+  # 1) Bootstrap sampling index
+  idx <- sample(seq_len(n), size = n, replace = TRUE)
+  df_boot <- df[idx, ]
+  
+  # 2) Fit the S-Learner on bootstrap sample
+  model_s_boot <- randomForest(
+    Y ~ W + population + police + unemployrt + income +
+      blackm_15_24 + whitem_15_24 + blackm_25_44 + whitem_25_44 +
+      prisoner + poverty + exp_subsidy + exp_pubwelfare,
+    data = df_boot
+  )
+  
+  # 3) W=1 and W=0
+  df_boot_w1 <- df_boot %>% mutate(W = 1)
+  df_boot_w0 <- df_boot %>% mutate(W = 0)
+  
+  # 4) Predict Y(W=1) and Y(W=0)
+  Yhat_w1_S_boot <- predict(model_s_boot, newdata = df_boot_w1)
+  Yhat_w0_S_boot <- predict(model_s_boot, newdata = df_boot_w0)
+  
+  # 5) ITE
+  tau_hat_S_boot <- Yhat_w1_S_boot - Yhat_w0_S_boot
+  
+  # 6) ATE
+  ATE_bootstrap_S[b] <- mean(tau_hat_S_boot)
+}
+
+# mean of Bootstrap distribution and 95% CI
+ATE_mean_S <- mean(ATE_bootstrap_S)
+CI_lower_S <- quantile(ATE_bootstrap_S, probs = 0.025)
+CI_upper_S <- quantile(ATE_bootstrap_S, probs = 0.975)
+
+cat("S-Learner Bootstrap ATE:", ATE_mean_S, "\n")
+cat("95% CI:", CI_lower_S, "~", CI_upper_S, "\n")
+```
+S-Learner Result is statistically significant.
+
+
+HTE
+```{r}
+df_subgroup <- df %>%
+  mutate(
+    tau_T = tau_hat_T,  # T-Learner ITE
+    tau_S = tau_hat_S,  # S-Learner ITE
+    group_income = ifelse(income < median(income), "Low Income", "High Income")
+  )
+
+df_subgroup %>%
+  group_by(group_income) %>%
+  summarise(
+    mean_tau_T = mean(tau_T),
+    mean_tau_S = mean(tau_S),
+    n = n()
+  )
+```
+We divide the data into high-income and low-income groups based on the median income and estimates the average treatment effect (ATE) within each subgroup using both meta-learning approaches.
+
+```{r}
+t_test_result <- t.test(
+  df_subgroup$tau_T[df_subgroup$group_income == "Low Income"],
+  df_subgroup$tau_T[df_subgroup$group_income == "High Income"]
+)
+
+t_test_result
+```
+There is a significant difference between the high-income and low-income groups in the T-Learner estimated ITE
+
+```{r}
+t_test_result_S <- t.test(
+  df_subgroup$tau_S[df_subgroup$group_income == "Low Income"],
+  df_subgroup$tau_S[df_subgroup$group_income == "High Income"]
+)
+
+t_test_result_S
+```
+No significant difference between the high-income and low-income groups in the S-Learner estimated ITE
+
+```{r}
+ggplot(df_subgroup, aes(x = income, y = tau_T)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  labs(title = "T-Learner HTE by Income",
+       x = "Income",
+       y = "Estimated Treatment Effect (tau_T)") +
+  theme_minimal()
+```
+The scatter plot shows a positive relationship between income and estimated treatment effects.
+
+```{r}
+df_subgroup <- df %>%
+  mutate(
+    tau_T = tau_hat_T,  # T-Learner ITE
+    tau_S = tau_hat_S,  # S-Learner ITE
+    
+    # Categorize by median black male age 15-24
+    group_black_15_24 = ifelse(blackm_15_24 < median(blackm_15_24, na.rm = TRUE), "Low BlackM 15-24", "High BlackM 15-24"),
+    
+    # Categorize by median black male age 25-44
+    group_black_25_44 = ifelse(blackm_25_44 < median(blackm_25_44, na.rm = TRUE), "Low BlackM 25-44", "High BlackM 25-44")
+  )
+
+# Group by Black Male 15-24 percentage and compute mean tau
+df_subgroup %>%
+  group_by(group_black_15_24) %>%
+  summarise(
+    mean_tau_T = mean(tau_T),
+    mean_tau_S = mean(tau_S),
+    n = n()
+  )
+
+# Group by Black Male 25-44 percentage and compute mean tau
+df_subgroup %>%
+  group_by(group_black_25_44) %>%
+  summarise(
+    mean_tau_T = mean(tau_T),
+    mean_tau_S = mean(tau_S),
+    n = n()
+  )
+```
+
+```{r}
+# T-test for Black Male 15-24 using T-Learner estimates
+t_test_result_15_24_T <- t.test(
+  df_subgroup$tau_T[df_subgroup$group_black_15_24 == "Low BlackM 15-24"],
+  df_subgroup$tau_T[df_subgroup$group_black_15_24 == "High BlackM 15-24"]
+)
+
+# T-test for Black Male 15-24 using S-Learner estimates
+t_test_result_15_24_S <- t.test(
+  df_subgroup$tau_S[df_subgroup$group_black_15_24 == "Low BlackM 15-24"],
+  df_subgroup$tau_S[df_subgroup$group_black_15_24 == "High BlackM 15-24"]
+)
+
+# T-test for Black Male 25-44 using T-Learner estimates
+t_test_result_25_44_T <- t.test(
+  df_subgroup$tau_T[df_subgroup$group_black_25_44 == "Low BlackM 25-44"],
+  df_subgroup$tau_T[df_subgroup$group_black_25_44 == "High BlackM 25-44"]
+)
+
+# T-test for Black Male 25-44 using S-Learner estimates
+t_test_result_25_44_S <- t.test(
+  df_subgroup$tau_S[df_subgroup$group_black_25_44 == "Low BlackM 25-44"],
+  df_subgroup$tau_S[df_subgroup$group_black_25_44 == "High BlackM 25-44"]
+)
+
+# Print the results
+t_test_result_15_24_T
+t_test_result_15_24_S
+t_test_result_25_44_T
+t_test_result_25_44_S
+```
+
+For Black males aged 15-24, both T-Learner and S-Learner show statistically significant higher mean treatment effect for areas with a high percentage of Black males aged 15-24 compared to areas with a low percentage. This suggests that Castle Doctrine laws have a significantly stronger impact on homicides in areas with a higher proportion of Black males aged 15-24.
+
+For Black males aged 25-44, T-Learner shows no statistical significance. But S-Learner's estimate is still statistically significant. S-Learner suggests that Castle Doctrine laws have a slightly stronger impact in areas with more Black males aged 25-44.
+
+```{r}
+ggplot(df_subgroup, aes(x = blackm_15_24, y = tau_T)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  labs(title = "T-Learner HTE by % Black Male (15-24)",
+       x = "% Black Male (15-24)",
+       y = "Estimated Treatment Effect (tau_T)") +
+  theme_minimal()
+
+```
+
+```{r}
+ggplot(df_subgroup, aes(x = blackm_25_44, y = tau_T)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  labs(title = "T-Learner HTE by % Black Male (25-44)",
+       x = "% Black Male (25-44)",
+       y = "Estimated Treatment Effect (tau_T)") +
+  theme_minimal()
+```
+The plots suggest that Castle Doctrine laws have the strongest effects at moderate levels of Black male population share, rather than in areas with extremely high or low proportions.
+
+# Causal Random Forest
+```{r}
+cf_fit <- causal_forest(
+  X,    
+  Y,    
+  W,    
+  tune.parameters = "all"
+)
+
+cat("\n")
+summary(cf_fit)
+```
+```{r}
+ate_cf  <- average_treatment_effect(cf_fit)
+cat("\n")
+ate_cf
+
+sprintf('95%% CI CRF ATE(%1.3f, %1.3f)', ate_cf[1] - 1.96 * ate_cf[2], ate_cf[1] + 1.96 * ate_cf[2]) #95% CI
+```
+The ATE is statistically significant. When transformed back to percentage terms, this implies a 4.61% increase in homicide rates.
+
+```{r}
+varimp <- variable_importance(cf_fit)
+ranked.vars <- order(varimp, decreasing = TRUE)
+cat("Feature importance (descending):\n")
+colnames(X)[ranked.vars]
+```
+```{r}
+blp_result <- best_linear_projection(cf_fit, X[, ranked.vars])
+blp_result
+```
+Most of the variables are not significant. However, we do can confirm that higher government subsidies are associated with lower treatment effects, suggesting that financial aid may offset the impact of CDL on homicide rates and economic condition of a state play a role in moderating the impact of CDL.
