@@ -28,8 +28,8 @@ Key Highlights:
 
 Contents:
 
-📂 data/ - Processed datasets used for analysis.
+📂 csv - Processed datasets used for analysis.
 
-📂 code/ - R scripts for causal inference modeling.
+📂 rmd & HTML - R scripts for causal inference modeling.
 
-📂 docs/ - Project documentation, references, and methodology explanations.
+📂 pptx - Project documentation, references, and methodology explanations.
